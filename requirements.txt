@@ -1,0 +1,7 @@
+streamlit
+requests
+numpy
+scikit-learn
+plotly
+fpdf2
+supabase
