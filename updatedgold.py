@@ -23,7 +23,6 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- CLOUD DATABASE INITIALIZATION ---
-# --- CLOUD DATABASE INITIALIZATION ---
 API_KEY = st.secrets["goldapi-341131eeaa93df79ea13bd94e65995b6-io"]
 
 @st.cache_resource
