@@ -56,60 +56,13 @@ url_making = float(query_params.get("making", 12.0))
 url_market = query_params.get("market", None)
 
 # --- CORE FUNCTIONS ---
-def get_geo_location():
-    # If we already have it, return it
-    if st.session_state.geo_location and st.session_state.geo_location != "Global Standard":
-        return st.session_state.geo_location
+# --- AUTO-LOCATE PROTOCOL ---
+# Cloud Proxy Bypass: Defaulting to primary region due to cloud ingress masking.
+detected_country = "India" 
+default_market = "India"
 
-    try:
-        user_ip = "UNKNOWN"
-        country = "Global Standard"
-        api_status = "PENDING"
-
-        # 1. Advanced IP Extraction (Checks multiple proxy headers)
-        if hasattr(st, "context") and hasattr(st.context, "headers"):
-            headers = st.context.headers
-            for header in ["X-Forwarded-For", "X-Real-Ip"]:
-                if header in headers:
-                    ip_list = headers[header].split(",")
-                    for ip_str in ip_list:
-                        ip_str = ip_str.strip()
-                        # Manually filter out private router IPs
-                        if not (ip_str.startswith("10.") or ip_str.startswith("192.168.") or ip_str.startswith("172.") or ip_str == "127.0.0.1"):
-                            user_ip = ip_str
-                            break
-                if user_ip != "UNKNOWN":
-                    break
-
-        # 2. Ping Cloud-Friendly API (ipwho.is)
-        if user_ip != "UNKNOWN":
-            try:
-                response = requests.get(f"https://ipwho.is/{user_ip}", timeout=5).json()
-                if response.get("success"):
-                    country = response.get("country", "Global Standard")
-                    api_status = "SECURE CONNECTION"
-                else:
-                    api_status = "API REJECTED"
-            except Exception as e:
-                api_status = f"API ERR: {str(e)[:20]}"
-        else:
-            api_status = "PROXY IP MASKED"
-
-    except Exception as e:
-        user_ip = "ERROR"
-        country = "Global Standard"
-        api_status = "SYS_ERROR"
-
-    # Save to session state so it doesn't re-run every click
-    st.session_state.geo_location = country
-    st.session_state.user_ip = user_ip
-
-    # --- TERMINAL TELEMETRY UI ---
-    st.sidebar.divider()
-    st.sidebar.caption("/// NETWORK TELEMETRY ///")
-    st.sidebar.code(f"CLIENT_IP : {user_ip}\nAPI_STATUS: {api_status}\nGEO_LOCK  : {country}", language="bash")
-
-    return country
+if url_market and url_market in MARKET_DB:
+    default_market = url_market
 def fetch_live_rates(currency_code):
     url = f"https://www.goldapi.io/api/XAU/{currency_code}"
     headers = {"x-access-token": API_KEY, "Content-Type": "application/json"}
