@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import numpy as np
+import ipaddress
 from sklearn.linear_model import LinearRegression
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
@@ -56,37 +57,44 @@ url_market = query_params.get("market", None)
 
 # --- CORE FUNCTIONS ---
 def get_geo_location():
-    # Diagnostic Mode: Bypassing cache to force a fresh read every time
+    # Keep the location if we already found a valid one
+    if st.session_state.geo_location and st.session_state.geo_location != "Global Standard":
+        return st.session_state.geo_location
+
     try:
-        user_ip = "IP NOT FOUND"
+        user_ip = None
         
-        # Step 1: Attempt to pull the IP from the cloud proxy headers
+        # 1. Pull the IP list from Streamlit Cloud Headers
         if hasattr(st, "context") and hasattr(st.context, "headers"):
             if "X-Forwarded-For" in st.context.headers:
-                user_ip = st.context.headers["X-Forwarded-For"].split(",")[0].strip()
+                ip_list = st.context.headers["X-Forwarded-For"].split(",")
                 
-        # Print what the server thinks your IP is to the sidebar
-        st.sidebar.warning(f"/// SYSTEM DEBUG - IP DETECTED: {user_ip} ///")
+                # Scan the list and grab the first PUBLIC IP
+                for ip_str in ip_list:
+                    ip_str = ip_str.strip()
+                    try:
+                        ip_obj = ipaddress.ip_address(ip_str)
+                        # Reject private internal IPs (like 192.168.x.x or 10.x.x.x)
+                        if not ip_obj.is_private and not ip_obj.is_loopback:
+                            user_ip = ip_str
+                            break # Found the true public IP!
+                    except ValueError:
+                        continue
 
-        # Step 2: Attempt the API Ping
-        if user_ip and user_ip != "IP NOT FOUND" and user_ip not in ["127.0.0.1", "::1"]:
+        # 2. Ping the API only if we found a valid public IP
+        if user_ip:
             url = f"http://ip-api.com/json/{user_ip}"
-            response = requests.get(url, timeout=5)
+            response = requests.get(url, timeout=5).json()
             
-            # Print the raw response from the API to the sidebar
-            st.sidebar.info(f"/// SYSTEM DEBUG - API RESPONSE: {response.text} ///")
-            
-            data = response.json()
-            if data.get("status") == "success":
-                st.session_state.geo_location = data.get("country", "Global Standard")
-                return st.session_state.geo_location
-                
-        return "Global Standard"
+            if response.get("status") == "success":
+                country = response.get('country', 'Global Standard')
+                st.session_state.geo_location = country
+                return country
 
-    except Exception as e:
-        # Print the exact python error if it crashes
-        st.sidebar.error(f"/// SYSTEM DEBUG - CRASH LOG: {str(e)} ///")
-        return "Global Standard"
+        return 'Global Standard'
+
+    except Exception:
+        return 'Global Standard'
 def fetch_live_rates(currency_code):
     url = f"https://www.goldapi.io/api/XAU/{currency_code}"
     headers = {"x-access-token": API_KEY, "Content-Type": "application/json"}
