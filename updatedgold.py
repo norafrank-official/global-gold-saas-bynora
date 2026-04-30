@@ -57,52 +57,54 @@ url_market = query_params.get("market", None)
 
 # --- CORE FUNCTIONS ---
 def get_geo_location():
-    # Only run the trace if we haven't locked onto a location yet
+    # If we already have it, return it
     if st.session_state.geo_location and st.session_state.geo_location != "Global Standard":
-        country = st.session_state.geo_location
-        user_ip = st.session_state.get("user_ip", "SECURE_CACHE")
-        api_status = "CACHED"
-    else:
+        return st.session_state.geo_location
+
+    try:
         user_ip = "UNKNOWN"
         country = "Global Standard"
         api_status = "PENDING"
 
-        try:
-            # 1. Advanced IP Extraction (Checks multiple proxy headers)
-            if hasattr(st, "context") and hasattr(st.context, "headers"):
-                headers = st.context.headers
-                for header in ["X-Forwarded-For", "X-Real-Ip"]:
-                    if header in headers:
-                        ip_list = headers[header].split(",")
-                        for ip_str in ip_list:
-                            ip_str = ip_str.strip()
-                            # Manually filter out private router IPs
-                            if not (ip_str.startswith("10.") or ip_str.startswith("192.168.") or ip_str.startswith("172.") or ip_str == "127.0.0.1"):
-                                user_ip = ip_str
-                                break
-                    if user_ip != "UNKNOWN":
-                        break
+        # 1. Advanced IP Extraction (Checks multiple proxy headers)
+        if hasattr(st, "context") and hasattr(st.context, "headers"):
+            headers = st.context.headers
+            for header in ["X-Forwarded-For", "X-Real-Ip"]:
+                if header in headers:
+                    ip_list = headers[header].split(",")
+                    for ip_str in ip_list:
+                        ip_str = ip_str.strip()
+                        # Manually filter out private router IPs
+                        if not (ip_str.startswith("10.") or ip_str.startswith("192.168.") or ip_str.startswith("172.") or ip_str == "127.0.0.1"):
+                            user_ip = ip_str
+                            break
+                if user_ip != "UNKNOWN":
+                    break
 
-            # 2. Ping Cloud-Friendly API (HTTPS secure)
-            if user_ip != "UNKNOWN":
+        # 2. Ping Cloud-Friendly API (ipwho.is)
+        if user_ip != "UNKNOWN":
+            try:
                 response = requests.get(f"https://ipwho.is/{user_ip}", timeout=5).json()
                 if response.get("success"):
                     country = response.get("country", "Global Standard")
                     api_status = "SECURE CONNECTION"
                 else:
-                    api_status = f"API REJECTED"
-            else:
-                api_status = "PROXY IP MASKED"
+                    api_status = "API REJECTED"
+            except Exception as e:
+                api_status = f"API ERR: {str(e)[:20]}"
+        else:
+            api_status = "PROXY IP MASKED"
 
-        except Exception as e:
-            api_status = "SYS_ERROR"
+    except Exception as e:
+        user_ip = "ERROR"
+        country = "Global Standard"
+        api_status = "SYS_ERROR"
 
-        # Save to session state so it doesn't re-run every click
-        st.session_state.geo_location = country
-        st.session_state.user_ip = user_ip
+    # Save to session state so it doesn't re-run every click
+    st.session_state.geo_location = country
+    st.session_state.user_ip = user_ip
 
     # --- TERMINAL TELEMETRY UI ---
-    # This adds a cool hacker-style diagnostic box to the bottom of the sidebar!
     st.sidebar.divider()
     st.sidebar.caption("/// NETWORK TELEMETRY ///")
     st.sidebar.code(f"CLIENT_IP : {user_ip}\nAPI_STATUS: {api_status}\nGEO_LOCK  : {country}", language="bash")
