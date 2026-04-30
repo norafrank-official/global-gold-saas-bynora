@@ -56,36 +56,37 @@ url_market = query_params.get("market", None)
 
 # --- CORE FUNCTIONS ---
 def get_geo_location():
-    # If the system already successfully found a real country, keep it.
-    # If it is stuck on the 'Global Standard' fallback, force it to try again.
-    if st.session_state.geo_location and st.session_state.geo_location != "Global Standard":
-        return st.session_state.geo_location
-
+    # Diagnostic Mode: Bypassing cache to force a fresh read every time
     try:
-        user_ip = None
+        user_ip = "IP NOT FOUND"
         
-        # 1. Securely pull the exact visitor IP from Streamlit's Cloud Headers
+        # Step 1: Attempt to pull the IP from the cloud proxy headers
         if hasattr(st, "context") and hasattr(st.context, "headers"):
             if "X-Forwarded-For" in st.context.headers:
                 user_ip = st.context.headers["X-Forwarded-For"].split(",")[0].strip()
+                
+        # Print what the server thinks your IP is to the sidebar
+        st.sidebar.warning(f"/// SYSTEM DEBUG - IP DETECTED: {user_ip} ///")
 
-        # 2. Use ipwhois.app (Much higher rate limits for cloud servers)
-        if user_ip and user_ip not in ["127.0.0.1", "::1"]:
-            url = f"http://ipwhois.app/json/{user_ip}"
-        else:
-            url = "http://ipwhois.app/json/"
+        # Step 2: Attempt the API Ping
+        if user_ip and user_ip != "IP NOT FOUND" and user_ip not in ["127.0.0.1", "::1"]:
+            url = f"http://ip-api.com/json/{user_ip}"
+            response = requests.get(url, timeout=5)
             
-        response = requests.get(url, timeout=5).json()
-        
-        # Extract country, default to Global Standard if the API fails
-        country = response.get('country', 'Global Standard')
-        st.session_state.geo_location = country
-        return country
+            # Print the raw response from the API to the sidebar
+            st.sidebar.info(f"/// SYSTEM DEBUG - API RESPONSE: {response.text} ///")
+            
+            data = response.json()
+            if data.get("status") == "success":
+                st.session_state.geo_location = data.get("country", "Global Standard")
+                return st.session_state.geo_location
+                
+        return "Global Standard"
 
-    except Exception:
-        # Ultimate failsafe
-        return 'Global Standard'
-
+    except Exception as e:
+        # Print the exact python error if it crashes
+        st.sidebar.error(f"/// SYSTEM DEBUG - CRASH LOG: {str(e)} ///")
+        return "Global Standard"
 def fetch_live_rates(currency_code):
     url = f"https://www.goldapi.io/api/XAU/{currency_code}"
     headers = {"x-access-token": API_KEY, "Content-Type": "application/json"}
