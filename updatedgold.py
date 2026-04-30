@@ -208,7 +208,8 @@ if app_mode == "MARKET TERMINAL":
             st.code(f"SECURE TRANSMISSION LINK:\n{base_url}?{query_str}", language="bash")
             
             current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            pdf_data = create_pdf_report(selected_market, current_time, weight, rate_22k, gold_val, making_cost, total_tax, final, symbol)
+            # ---> THIS IS THE LINE THAT WAS FIXED (passing 'curr' instead of 'symbol') <---
+            pdf_data = create_pdf_report(selected_market, current_time, weight, rate_22k, gold_val, making_cost, total_tax, final, curr)
             st.download_button(label="[ DOWNLOAD FINANCIAL REPORT .PDF ]", data=pdf_data, file_name=f"Quote_{curr}_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
     else:
         st.error("SYSTEM ERROR: API CONNECTION FAILED. VERIFY API KEY.")
