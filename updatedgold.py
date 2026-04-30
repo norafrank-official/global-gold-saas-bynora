@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import numpy as np
-import ipaddress
 from sklearn.linear_model import LinearRegression
 import plotly.graph_objects as go
 from datetime import datetime, timedelta
@@ -47,8 +46,6 @@ MARKET_DB = {
 # --- SYSTEM STATE ---
 if 'user_email' not in st.session_state:
     st.session_state.user_email = None
-if 'geo_location' not in st.session_state:
-    st.session_state.geo_location = None
 
 query_params = st.query_params
 url_weight = float(query_params.get("weight", 8.0))
@@ -56,13 +53,6 @@ url_making = float(query_params.get("making", 12.0))
 url_market = query_params.get("market", None)
 
 # --- CORE FUNCTIONS ---
-# --- AUTO-LOCATE PROTOCOL ---
-# Cloud Proxy Bypass: Defaulting to primary region due to cloud ingress masking.
-detected_country = "India" 
-default_market = "India"
-
-if url_market and url_market in MARKET_DB:
-    default_market = url_market
 def fetch_live_rates(currency_code):
     url = f"https://www.goldapi.io/api/XAU/{currency_code}"
     headers = {"x-access-token": API_KEY, "Content-Type": "application/json"}
@@ -121,9 +111,11 @@ def create_pdf_report(market, date_str, weight, rate, gold_val, making, tax_amou
     pdf.cell(70, 10, f"{curr_sym} {total:,.2f}", align="R", ln=True)
     return bytes(pdf.output())
 
-# --- AUTO-LOCATE PROTOCOL ---
-detected_country = get_geo_location()
-default_market = detected_country if detected_country in MARKET_DB else "Global Standard"
+# --- AUTO-LOCATE PROTOCOL (EXECUTIVE OVERRIDE) ---
+# Cloud Proxy Bypass: Defaulting to primary region due to cloud ingress masking.
+detected_country = "India" 
+default_market = "India"
+
 if url_market and url_market in MARKET_DB:
     default_market = url_market
 
