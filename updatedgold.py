@@ -9,7 +9,7 @@ import urllib.parse
 from supabase import create_client, Client
 
 # --- CONFIGURATION & STYLING ---
-st.set_page_config(page_title="Global Asset Command Center", layout="wide")
+st.set_page_config(page_title="Gold Portfolio Tracker", layout="wide")
 
 st.markdown("""
     <style>
@@ -35,7 +35,7 @@ supabase = init_connection()
 
 # --- GLOBAL MARKET DATABASE ---
 MARKET_DB = {
-    "India": {"curr": "INR", "sym": "INR", "tax_type": "SPLIT", "gold_tax": 0.03, "make_tax": 0.05},
+    "India": {"curr": "INR", "sym": "₹", "tax_type": "SPLIT", "gold_tax": 0.03, "make_tax": 0.05},
     "Saudi Arabia": {"curr": "SAR", "sym": "SAR", "tax_type": "FLAT", "tax_rate": 0.15},
     "United Arab Emirates": {"curr": "AED", "sym": "AED", "tax_type": "FLAT", "tax_rate": 0.05},
     "United States": {"curr": "USD", "sym": "$", "tax_type": "FLAT", "tax_rate": 0.00},
@@ -129,8 +129,8 @@ if url_market and url_market in MARKET_DB:
     default_market = url_market
 
 # --- UI HEADER ---
-st.title("GLOBAL ASSET COMMAND CENTER")
-st.text(f"SYSTEM STATUS: ONLINE | GEO-TRACE: {detected_country}")
+st.title("GOLD PORTFOLIO TRACKER")
+st.text(f"SYSTEM STATUS: ONLINE | GEO-TRACE LOCATION: {detected_country}")
 st.divider()
 
 # --- SIDEBAR: NAVIGATION ---
@@ -322,8 +322,14 @@ elif app_mode == "ALERT WEBHOOKS":
 st.markdown("<br><br>", unsafe_allow_html=True)
 st.divider()
 st.markdown(
-    "<div style='text-align: center; color: #00ff41; opacity: 0.7; font-size: 0.8em;'>"
+    "<div style='text-align: center; color: #00ff41; opacity: 0.8; font-family: Courier New, monospace;'>"
     "/// SYSTEM ARCHITECTURE COMPILED & ENGINEERED BY: <strong>NORA FRANK</strong> ///"
+    "<br><br>"
+    "<div style='font-size: 0.75em; opacity: 0.6; max-width: 600px; margin: 0 auto;'>"
+    "⚠️ <strong>DISCLAIMER:</strong> This application is built strictly for educational and portfolio demonstration purposes. "
+    "The data and predictions provided do not constitute professional financial advice. "
+    "Please consult a certified financial advisor before making any real-world investment decisions."
+    "</div>"
     "</div>", 
     unsafe_allow_html=True
 )
