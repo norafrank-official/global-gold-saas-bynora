@@ -23,12 +23,12 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- CLOUD DATABASE INITIALIZATION ---
-API_KEY = st.secrets["GOLD_API_KEY"]
+API_KEY = st.secrets["goldapi-341131eeaa93df79ea13bd94e65995b6-io"]
 
 @st.cache_resource
 def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
+    url = st.secrets["https://qgnpnuahtkgevsgvwunp.supabase.co"]
+    key = st.secrets["sb_publishable_35shkWExhbhx47YXiEZnZQ_wcC_EBIP"]
     return create_client(url, key)
 
 supabase = init_connection()
