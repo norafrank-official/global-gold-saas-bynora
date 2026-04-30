@@ -58,7 +58,21 @@ url_market = query_params.get("market", None)
 def get_geo_location():
     if not st.session_state.geo_location:
         try:
-            res = requests.get('http://ip-api.com/json/', timeout=3).json()
+            # 1. Ask Streamlit for the visitor's actual IP address
+            try:
+                user_ip = st.context.ip_address
+            except AttributeError:
+                user_ip = None # Fallback for older environments
+                
+            # 2. Route the request based on the environment
+            if user_ip and user_ip not in ["127.0.0.1", "::1"]:
+                # Cloud Environment: Look up the visitor's specific IP
+                api_url = f'http://ip-api.com/json/{user_ip}'
+            else:
+                # Local Environment: Look up the machine's own IP
+                api_url = 'http://ip-api.com/json/'
+                
+            res = requests.get(api_url, timeout=3).json()
             st.session_state.geo_location = res.get('country', 'Global Standard')
         except:
             st.session_state.geo_location = 'Global Standard'
