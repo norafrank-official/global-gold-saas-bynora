@@ -29,5 +29,5 @@ The Asset Command Center is a full-stack SaaS application that breaks away from 
 
 ### 1. Clone the Repository
 ```bash
-git clone [https://github.com/your-username/asset-command-center.git](https://github.com/your-username/asset-command-center.git)
-cd asset-command-center
+git clone [https://github.com/Ammushama/gold-saas-bynora.git](https://github.com/your-Ammushama/gold-saas-bynora.git)
+cd gold-saas-bynora
