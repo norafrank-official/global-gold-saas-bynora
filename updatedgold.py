@@ -1,17 +1,37 @@
-import streamlit as st
-import requests
-import numpy as np
-from sklearn.linear_model import LinearRegression
-import plotly.graph_objects as go
-from datetime import datetime, timedelta
-from fpdf import FPDF
-import urllib.parse
-from supabase import create_client, Client
+"""
+updatedgold.py
+==============
+global-gold-saas v2 — Streamlit UI + routing.
 
-# --- CONFIGURATION & STYLING ---
+This module owns ONLY the presentation layer:
+    - Page config + brutalist CSS theme
+    - Sidebar navigation (metal / region / module selectors)
+    - Three modules: MARKET TERMINAL, ENCRYPTED VAULT, ALERT WEBHOOKS
+    - Header + footer
+
+All logic lives in `gold_engine.py` (pure functions); all external I/O lives
+in `gold_io.py` (network, Supabase, secrets).
+"""
+
+from __future__ import annotations
+
+import urllib.parse
+from datetime import datetime, timedelta
+
+import plotly.graph_objects as go
+import streamlit as st
+
+import gold_engine as eng
+import gold_io as io_
+
+# --------------------------------------------------------------------------- #
+# PAGE CONFIG + THEME
+# --------------------------------------------------------------------------- #
+
 st.set_page_config(page_title="Gold Portfolio Tracker", layout="wide")
 
-st.markdown("""
+st.markdown(
+    """
     <style>
     .main { background-color: #0e1117; color: #00ff41; font-family: 'Courier New', monospace; }
     div[data-testid="stMetricValue"], div[data-testid="stMarkdownContainer"] p { color: #00ff41 !important; }
@@ -19,298 +39,438 @@ st.markdown("""
     .stButton>button { border: 1px solid #00ff41; color: #00ff41; background-color: black; width: 100%; }
     .stButton>button:hover { background-color: #00ff41; color: black; }
     .stTextInput>div>div>input, .stNumberInput>div>div>input { color: #00ff41; background-color: #262730; border: 1px solid #00ff41; }
+    .signal-buy   { color: #00ff41; font-weight: bold; }
+    .signal-sell  { color: #ff003c; font-weight: bold; }
+    .signal-hold  { color: #ffaa00; font-weight: bold; }
     </style>
-    """, unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 
-# --- CLOUD DATABASE INITIALIZATION ---
-API_KEY = st.secrets["GOLD_API_KEY"]
+# --------------------------------------------------------------------------- #
+# SESSION STATE
+# --------------------------------------------------------------------------- #
 
-@st.cache_resource
-def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
-
-supabase = init_connection()
-
-# --- GLOBAL MARKET DATABASE ---
-MARKET_DB = {
-    "India": {"curr": "INR", "sym": "₹", "tax_type": "SPLIT", "gold_tax": 0.03, "make_tax": 0.05},
-    "Saudi Arabia": {"curr": "SAR", "sym": "SAR", "tax_type": "FLAT", "tax_rate": 0.15},
-    "United Arab Emirates": {"curr": "AED", "sym": "AED", "tax_type": "FLAT", "tax_rate": 0.05},
-    "United States": {"curr": "USD", "sym": "$", "tax_type": "FLAT", "tax_rate": 0.00},
-    "United Kingdom": {"curr": "GBP", "sym": "£", "tax_type": "FLAT", "tax_rate": 0.20},
-    "Global Standard": {"curr": "USD", "sym": "$", "tax_type": "FLAT", "tax_rate": 0.00}
-}
-
-# --- SYSTEM STATE ---
-if 'user_email' not in st.session_state:
+if "user_email" not in st.session_state:
     st.session_state.user_email = None
 
 query_params = st.query_params
-url_weight = float(query_params.get("weight", 8.0))
-url_making = float(query_params.get("making", 12.0))
+url_weight = float(query_params.get("weight", 8.0) or 8.0)
+url_making = float(query_params.get("making", 12.0) or 12.0)
 url_market = query_params.get("market", None)
+url_metal = query_params.get("metal", None)
 
-# --- CORE FUNCTIONS ---
-def fetch_live_rates(currency_code):
-    url = f"https://www.goldapi.io/api/XAU/{currency_code}"
-    headers = {"x-access-token": API_KEY, "Content-Type": "application/json"}
-    try:
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            return response.json().get('price_gram_24k')
-        return None
-    except:
-        return None
+# --------------------------------------------------------------------------- #
+# HEADER
+# --------------------------------------------------------------------------- #
 
-def generate_historical_data_and_predict(current_price):
-    np.random.seed(datetime.now().day)
-    volatility = current_price * 0.004
-    changes = np.random.normal(0.5, volatility, size=30)
-    prices = np.cumsum(changes)
-    historical_prices = prices - prices[-1] + current_price
-    X = np.arange(30).reshape(-1, 1)
-    model = LinearRegression().fit(X, historical_prices)
-    next_day_prediction = model.predict([[30]])[0]
-    return historical_prices, next_day_prediction
+detected_country = "India"  # cloud proxy bypass — geo-IP optional, out of scope
+default_market = url_market if (url_market and url_market in eng.MARKET_DB) else detected_country
 
-def create_pdf_report(market, date_str, weight, rate, gold_val, making, tax_amount, total, curr_sym):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Courier", size=10)
-    pdf.set_font("Courier", style="B", size=16)
-    pdf.cell(0, 10, "SECURE PROCUREMENT QUOTATION", ln=True, align="C")
-    pdf.set_font("Courier", size=10)
-    pdf.cell(0, 10, f"TIMESTAMP: {date_str} | REGION: {market}", ln=True, align="C")
-    pdf.line(10, 30, 200, 30)
-    pdf.ln(10)
-    
-    pdf.set_font("Courier", style="B", size=12)
-    pdf.cell(0, 10, "COMMODITY SPECIFICATIONS", ln=True)
-    pdf.set_font("Courier", size=12)
-    pdf.cell(100, 8, f"Purity: 22K (91.6%)")
-    pdf.cell(90, 8, f"Weight: {weight} Grams", ln=True)
-    pdf.cell(100, 8, f"Base Rate (1g): {curr_sym} {rate:,.2f}", ln=True)
-    pdf.ln(5)
-    
-    pdf.set_font("Courier", style="B", size=12)
-    pdf.cell(0, 10, "FINANCIAL BREAKDOWN", ln=True)
-    pdf.set_font("Courier", size=12)
-    pdf.cell(120, 8, "Base Gold Value:")
-    pdf.cell(70, 8, f"{curr_sym} {gold_val:,.2f}", align="R", ln=True)
-    pdf.cell(120, 8, "Workmanship:")
-    pdf.cell(70, 8, f"{curr_sym} {making:,.2f}", align="R", ln=True)
-    pdf.cell(120, 8, "Taxes & Levies:")
-    pdf.cell(70, 8, f"{curr_sym} {tax_amount:,.2f}", align="R", ln=True)
-    pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
-    pdf.ln(5)
-    
-    pdf.set_font("Courier", style="B", size=14)
-    pdf.cell(120, 10, "NET PAYABLE:")
-    pdf.cell(70, 10, f"{curr_sym} {total:,.2f}", align="R", ln=True)
-    return bytes(pdf.output())
-
-# --- AUTO-LOCATE PROTOCOL (EXECUTIVE OVERRIDE) ---
-# Cloud Proxy Bypass: Defaulting to primary region due to cloud ingress masking.
-detected_country = "India" 
-default_market = "India"
-
-if url_market and url_market in MARKET_DB:
-    default_market = url_market
-
-# --- UI HEADER ---
 st.title("GOLD PORTFOLIO TRACKER")
 st.text(f"SYSTEM STATUS: ONLINE | GEO-TRACE LOCATION: {detected_country}")
 st.divider()
 
-# --- SIDEBAR: NAVIGATION ---
+# --------------------------------------------------------------------------- #
+# SIDEBAR
+# --------------------------------------------------------------------------- #
+
 with st.sidebar:
     st.header("SYSTEM MODULE")
-    app_mode = st.radio("SELECT PROTOCOL", ["MARKET TERMINAL", "ENCRYPTED VAULT", "ALERT WEBHOOKS"])
+    app_mode = st.radio(
+        "SELECT PROTOCOL",
+        ["MARKET TERMINAL", "ENCRYPTED VAULT", "ALERT WEBHOOKS"],
+    )
     st.divider()
-    
+
+    st.header("ASSET")
+    metal_codes = list(eng.METALS_DB.keys())
+    metal_labels = [eng.METALS_DB[c]["name"] for c in metal_codes]
+    default_metal_idx = metal_codes.index(url_metal) if url_metal in metal_codes else 0
+    selected_metal_idx = st.selectbox(
+        "SELECT METAL",
+        range(len(metal_codes)),
+        index=default_metal_idx,
+        format_func=lambda i: f"{metal_codes[i]} - {metal_labels[i]}",
+    )
+    selected_metal = metal_codes[selected_metal_idx]
+    metal_cfg = eng.METALS_DB[selected_metal]
+
+    purity_options = list(metal_cfg["purities"].keys())
+    purity_default_idx = purity_options.index(metal_cfg["default_purity"])
+    selected_purity = st.selectbox("SELECT PURITY", purity_options, index=purity_default_idx)
+    purity_factor = metal_cfg["purities"][selected_purity]
+
+    st.divider()
     st.header("MARKET OVERRIDE")
-    market_keys = list(MARKET_DB.keys())
+    market_keys = list(eng.MARKET_DB.keys())
     default_index = market_keys.index(default_market)
     selected_market = st.selectbox("SELECT REGION", market_keys, index=default_index)
-    
-    market_data = MARKET_DB[selected_market]
+
+    market_data = eng.MARKET_DB[selected_market]
     curr = market_data["curr"]
     symbol = market_data["sym"]
 
-# --- MODULE 1: MARKET TERMINAL ---
-if app_mode == "MARKET TERMINAL":
-    spot_24k = fetch_live_rates(curr)
-    
-    if spot_24k:
-        rate_22k = spot_24k * 0.9166
-        
-        c1, c2, c3 = st.columns(3)
-        c1.metric(f"LIVE 22K (1G) - {curr}", f"{symbol} {rate_22k:,.2f}")
-        c2.metric("LIVE 22K (8G/PAVAN)", f"{symbol} {(rate_22k * 8):,.2f}")
-        c3.metric("24K SPOT RATE", f"{symbol} {spot_24k:,.2f}")
-        
-        st.subheader("AI MARKET FORECAST (24H)")
-        historical_data, prediction = generate_historical_data_and_predict(spot_24k)
-        trend_diff = prediction - spot_24k
-        
-        p_col, c_col = st.columns([1, 3])
-        with p_col:
-            st.write("NEXT 24H OUTLOOK")
-            if trend_diff > 0:
-                st.success(f"BULLISH TREND\n\nProjected: {symbol} {prediction:,.2f}")
-            else:
-                st.error(f"BEARISH TREND\n\nProjected: {symbol} {prediction:,.2f}")
-            st.caption("Model: Linear Regression")
+# --------------------------------------------------------------------------- #
+# HELPERS
+# --------------------------------------------------------------------------- #
 
-        with c_col:
-            dates = [(datetime.now() - timedelta(days=i)).strftime('%b %d') for i in range(29, -1, -1)]
-            dates.append("TOMORROW")
-            fig = go.Figure()
-            fig.add_trace(go.Scatter(x=dates[:-1], y=historical_data, mode='lines', line=dict(color='#00ff41', width=2)))
-            fig.add_trace(go.Scatter(x=[dates[-2], dates[-1]], y=[historical_data[-1], prediction], mode='lines+markers', line=dict(color='#ff003c', width=2, dash='dot')))
-            fig.update_layout(plot_bgcolor='#0e1117', paper_bgcolor='#0e1117', font=dict(color='#00ff41', family='Courier New'), margin=dict(l=0, r=0, t=10, b=0), xaxis=dict(showgrid=False), yaxis=dict(showgrid=True, gridcolor='#262730'), showlegend=False)
-            st.plotly_chart(fig, use_container_width=True)
+def _render_news_strip() -> None:
+    headlines = io_.fetch_headlines(limit=5)
+    if not headlines:
+        st.code(">>> NEWS WIRE OFFLINE.", language="bash")
+        return
+    lines = [f"[{h['published']}] {h['title']}" for h in headlines]
+    st.code(">>> COMMODITY METALS NEWS\n" + "\n".join(lines), language="bash")
+
+
+def _render_signal_panel(spot: float, metal: str, currency: str) -> None:
+    history = io_.fetch_history(metal, currency, days=120)
+    if history is None or len(history) < 30:
+        st.warning(
+            f"INSUFFICIENT MARKET HISTORY FOR {metal}/{currency} - "
+            "DECISION ENGINE OFFLINE (NEED >=30 TRADING DAYS)."
+        )
+        return
+
+    indicators = eng.compute_indicators(history)
+    prediction, lower, upper = eng.forecast_ensemble(history, indicators)
+    signal = eng.decide_signal(spot, indicators, prediction)
+    wins, decisions = eng.backtest_walkforward(history, lookback=30)
+
+    css_class = {"BUY": "signal-buy", "SELL": "signal-sell", "HOLD": "signal-hold"}[signal.action]
+    st.markdown(
+        f"<h3 class='{css_class}'>&gt;&gt;&gt; SIGNAL: {signal.action} "
+        f"[CONF: {signal.confidence:.2f} | SCORE: {signal.score:+d}]</h3>",
+        unsafe_allow_html=True,
+    )
+
+    win_rate_str = (
+        f"WIN RATE (30D BACKTEST): {wins}/{decisions} ({wins/decisions*100:.0f}%)"
+        if decisions
+        else "WIN RATE (30D BACKTEST): N/A (TOO FEW DECISIONS)"
+    )
+    st.caption(win_rate_str)
+
+    breakdown_lines = [
+        f"{b.label:<12}  {'+' if b.vote > 0 else '-' if b.vote < 0 else ' '}  {b.detail}"
+        for b in signal.breakdown
+    ]
+    st.code(">>> INDICATOR BREAKDOWN\n" + "\n".join(breakdown_lines), language="bash")
+
+    # Chart: historical close + SMA overlays + forecast point with CI ribbon
+    dates = history.index.strftime("%b %d").tolist()
+    close = history["close"].astype(float).tolist()
+    sma7 = indicators["sma_7"].tolist()
+    sma30 = indicators["sma_30"].tolist()
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=dates, y=close, mode="lines", name="CLOSE", line=dict(color="#00ff41", width=2)))
+    fig.add_trace(go.Scatter(x=dates, y=sma7, mode="lines", name="SMA(7)", line=dict(color="#00aaff", width=1)))
+    fig.add_trace(go.Scatter(x=dates, y=sma30, mode="lines", name="SMA(30)", line=dict(color="#ffaa00", width=1)))
+
+    tomorrow = "T+1"
+    fig.add_trace(
+        go.Scatter(
+            x=[dates[-1], tomorrow],
+            y=[close[-1], prediction],
+            mode="lines+markers",
+            name="FORECAST",
+            line=dict(color="#ff003c", width=2, dash="dot"),
+        )
+    )
+    # Confidence interval shading at the forecast point
+    fig.add_trace(
+        go.Scatter(
+            x=[tomorrow, tomorrow],
+            y=[lower, upper],
+            mode="lines",
+            name="95% CI",
+            line=dict(color="#ff003c", width=8),
+            opacity=0.3,
+        )
+    )
+    fig.update_layout(
+        plot_bgcolor="#0e1117",
+        paper_bgcolor="#0e1117",
+        font=dict(color="#00ff41", family="Courier New"),
+        margin=dict(l=0, r=0, t=10, b=0),
+        xaxis=dict(showgrid=False),
+        yaxis=dict(showgrid=True, gridcolor="#262730"),
+        legend=dict(bgcolor="rgba(0,0,0,0)"),
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
+# --------------------------------------------------------------------------- #
+# MODULE 1: MARKET TERMINAL
+# --------------------------------------------------------------------------- #
+
+if app_mode == "MARKET TERMINAL":
+    spot_24k = io_.fetch_live_rate(selected_metal, curr)
+
+    if spot_24k is None:
+        st.error("SYSTEM ERROR: API CONNECTION FAILED OR QUOTA EXHAUSTED. VERIFY GOLD_API_KEY.")
+    else:
+        rate_purity = spot_24k * purity_factor
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric(
+            f"LIVE {selected_purity} (1G) - {curr}",
+            f"{symbol}{rate_purity:,.2f}",
+        )
+        c2.metric(
+            f"LIVE {selected_purity} (8G/PAVAN)",
+            f"{symbol}{(rate_purity * 8):,.2f}",
+        )
+        c3.metric(
+            "FINE SPOT RATE (1G)",
+            f"{symbol}{spot_24k:,.2f}",
+        )
+
+        _render_news_strip()
 
         st.divider()
+        st.subheader(f"AI DECISION ENGINE - {metal_cfg['name']}")
+        _render_signal_panel(spot_24k, selected_metal, curr)
 
+        st.divider()
         st.subheader("PROCUREMENT ENGINE")
         col_input, col_result = st.columns(2)
 
         with col_input:
-            weight = st.number_input("Weight (Grams)", min_value=0.1, value=url_weight)
+            weight = st.number_input("Weight (Grams)", min_value=0.1, max_value=100_000.0, value=url_weight)
             m_type = st.selectbox("Making Charge Type", ["Percentage", "Flat Rate"])
             m_val = st.number_input(f"Enter {m_type} Value", min_value=0.0, value=url_making)
 
-        gold_val = rate_22k * weight
-        making_cost = gold_val * (m_val / 100) if m_type == "Percentage" else m_val * weight
-
-        if market_data["tax_type"] == "SPLIT":
-            gold_tax = gold_val * market_data["gold_tax"]
-            making_tax = making_cost * market_data["make_tax"]
-            total_tax = gold_tax + making_tax
-            tax_info = f"TAX: Gold ({market_data['gold_tax']*100}%) = {symbol} {gold_tax:,.2f} | Making ({market_data['make_tax']*100}%) = {symbol} {making_tax:,.2f}"
-        else:
-            total_tax = (gold_val + making_cost) * market_data["tax_rate"]
-            tax_info = f"TAX: Flat ({market_data['tax_rate']*100}%) = {symbol} {total_tax:,.2f}"
-
-        final = gold_val + making_cost + total_tax
+        pricing = eng.compute_pricing(
+            rate_per_gram=spot_24k,
+            weight=weight,
+            purity_factor=purity_factor,
+            making_type=m_type,
+            making_value=m_val,
+            market_key=selected_market,
+        )
 
         with col_result:
-            st.write(f"BASE GOLD VALUE:  {symbol} {gold_val:,.2f}")
-            st.write(f"LABOR CHARGES:    {symbol} {making_cost:,.2f}")
-            st.caption(tax_info)
-            st.write(f"### NET PAYABLE: {symbol} {final:,.2f}")
-            
-            base_url = "https://your-app-name.streamlit.app/" 
-            query_str = urllib.parse.urlencode({'weight': weight, 'making': m_val, 'market': selected_market})
-            st.code(f"SECURE TRANSMISSION LINK:\n{base_url}?{query_str}", language="bash")
-            
-            current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            # ---> THIS IS THE LINE THAT WAS FIXED (passing 'curr' instead of 'symbol') <---
-            pdf_data = create_pdf_report(selected_market, current_time, weight, rate_22k, gold_val, making_cost, total_tax, final, curr)
-            st.download_button(label="[ DOWNLOAD FINANCIAL REPORT .PDF ]", data=pdf_data, file_name=f"Quote_{curr}_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
-    else:
-        st.error("SYSTEM ERROR: API CONNECTION FAILED. VERIFY API KEY.")
+            st.write(f"BASE METAL VALUE: {symbol}{pricing.metal_value:,.2f}")
+            st.write(f"LABOR CHARGES:    {symbol}{pricing.making_cost:,.2f}")
+            st.caption(pricing.tax_breakdown)
+            st.write(f"### NET PAYABLE: {symbol}{pricing.total:,.2f}")
 
-# --- MODULE 2: ENCRYPTED CLOUD VAULT (SUPABASE) ---
+            base_url = "https://your-app-name.streamlit.app/"
+            query_str = urllib.parse.urlencode(
+                {
+                    "weight": weight,
+                    "making": m_val,
+                    "market": selected_market,
+                    "metal": selected_metal,
+                }
+            )
+            st.code(f"SECURE TRANSMISSION LINK:\n{base_url}?{query_str}", language="bash")
+
+            current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            pdf_data = eng.create_pdf_report(
+                metal_name=metal_cfg["name"],
+                purity_label=selected_purity,
+                purity_factor=purity_factor,
+                market=selected_market,
+                currency=curr,
+                weight=weight,
+                rate_per_gram=spot_24k,
+                pricing=pricing,
+                timestamp=current_time,
+            )
+            st.download_button(
+                label="[ DOWNLOAD FINANCIAL REPORT .PDF ]",
+                data=pdf_data,
+                file_name=f"Quote_{selected_metal}_{curr}_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+            )
+
+# --------------------------------------------------------------------------- #
+# MODULE 2: ENCRYPTED VAULT (Supabase: auth + portfolio + watchlist)
+# --------------------------------------------------------------------------- #
+
 elif app_mode == "ENCRYPTED VAULT":
     st.subheader("RESTRICTED AREA: SUPABASE CLOUD PORTFOLIO")
-    
-    # STATE 1: AUTHENTICATION
+
+    # STATE 1: AUTH
     if not st.session_state.user_email:
         st.text("AWAITING CREDENTIALS...")
-        
         auth_col1, auth_col2 = st.columns(2)
         with auth_col1:
             email = st.text_input("EMAIL ADDRESS")
         with auth_col2:
             password = st.text_input("PASSWORD", type="password")
-            
+
         c1, c2 = st.columns(2)
         with c1:
             if st.button("[ INITIATE LOGIN ]"):
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                    st.session_state.user_email = res.user.email
-                    st.success("ACCESS GRANTED.")
-                    st.rerun()
-                except Exception as e:
-                    st.error("ACCESS DENIED: Invalid Credentials.")
+                if not eng.is_valid_email(email):
+                    st.error("ACCESS DENIED: Invalid email format.")
+                elif len(password) < 6:
+                    st.error("ACCESS DENIED: Password too short.")
+                else:
+                    try:
+                        st.session_state.user_email = io_.sign_in(email, password)
+                        st.success("ACCESS GRANTED.")
+                        st.rerun()
+                    except io_.AuthError as e:
+                        st.error(f"ACCESS DENIED: {e}")
         with c2:
             if st.button("[ REGISTER NEW OPERATOR ]"):
-                try:
-                    res = supabase.auth.sign_up({"email": email, "password": password})
-                    st.success("REGISTRATION SUCCESSFUL. YOU MAY NOW LOGIN.")
-                except Exception as e:
-                    st.error(f"REGISTRATION FAILED: {e}")
+                if not eng.is_valid_email(email):
+                    st.error("REGISTRATION FAILED: Invalid email format.")
+                elif len(password) < 6:
+                    st.error("REGISTRATION FAILED: Password must be at least 6 chars.")
+                else:
+                    try:
+                        io_.sign_up(email, password)
+                        st.success("REGISTRATION SUCCESSFUL. CHECK YOUR EMAIL TO CONFIRM, THEN LOGIN.")
+                    except io_.AuthError as e:
+                        st.error(f"REGISTRATION FAILED: {e}")
 
-    # STATE 2: VAULT UNLOCKED
+    # STATE 2: UNLOCKED
     if st.session_state.user_email:
-        st.success(f"CONNECTION SECURE. OPERATOR: {st.session_state.user_email}")
-        
+        user_email = st.session_state.user_email
+        st.success(f"CONNECTION SECURE. OPERATOR: {user_email}")
+
+        # --- Portfolio: add asset ---
         with st.expander("[ + ADD NEW ASSET TO CLOUD ]"):
             with st.form("add_asset_form", clear_on_submit=True):
                 a_name = st.text_input("Asset Identifier (e.g., 22K Ring)")
-                a_weight = st.number_input("Weight (Grams)", min_value=0.1, step=0.1)
+                a_weight = st.number_input("Weight (Grams)", min_value=0.1, max_value=100_000.0, step=0.1)
                 a_price = st.number_input(f"Total Purchase Price ({curr})", min_value=1.0, step=100.0)
-                submit_asset = st.form_submit_button("[ UPLOAD RECORD TO CLOUD ]")
-                
-                if submit_asset and a_name:
-                    supabase.table("portfolio").insert({
-                        "user_email": st.session_state.user_email,
-                        "item_name": a_name,
-                        "weight": a_weight,
-                        "buy_price": a_price,
-                        "currency": curr
-                    }).execute()
-                    st.success("RECORD UPLOADED SUCCESSFULLY.")
-                    st.rerun()
+                if st.form_submit_button("[ UPLOAD RECORD TO CLOUD ]"):
+                    if a_name and eng.is_valid_weight(a_weight):
+                        ok = io_.add_asset(user_email, a_name.strip(), a_weight, a_price, curr, selected_metal)
+                        if ok:
+                            st.success("RECORD UPLOADED SUCCESSFULLY.")
+                            st.rerun()
+                        else:
+                            st.error("UPLOAD FAILED. CHECK LOGS.")
+                    else:
+                        st.error("INVALID ASSET DATA.")
 
         st.divider()
         st.write("### ASSET MANIFEST")
-        
-        response = supabase.table("portfolio").select("*").eq("user_email", st.session_state.user_email).execute()
-        assets = response.data
-        
-        if len(assets) == 0:
+
+        assets = io_.list_portfolio(user_email)
+        if not assets:
             st.code(">>> MANIFEST EMPTY. NO ASSETS DETECTED FOR THIS USER.", language="bash")
         else:
-            live_24k = fetch_live_rates(curr)
-            live_22k = live_24k * 0.9166 if live_24k else 0
-            
+            live_spot = io_.fetch_live_rate(selected_metal, curr)
+            live_priced = live_spot * purity_factor if live_spot else 0.0
             for asset in assets:
-                current_value = float(asset['weight']) * live_22k
-                profit = current_value - float(asset['buy_price'])
-                
-                st.code(f"""
+                current_value = float(asset["weight"]) * live_priced
+                profit = current_value - float(asset["buy_price"])
+                cols = st.columns([5, 1])
+                with cols[0]:
+                    st.code(
+                        f"""
 ASSET ID    : {asset['item_name']}
 WEIGHT      : {asset['weight']}g
-BUY IN      : {asset['currency']} {asset['buy_price']:,.2f}
-LIVE VALUE  : {curr} {current_value:,.2f}
+BUY IN      : {asset['currency']} {float(asset['buy_price']):,.2f}
+LIVE VALUE  : {curr} {current_value:,.2f}  ({selected_purity} basis)
 MARGIN      : {'+' if profit >= 0 else '-'} {curr} {abs(profit):,.2f}
-                """, language="bash")
-        
+""".strip(),
+                        language="bash",
+                    )
+                with cols[1]:
+                    if st.button("[ DELETE ]", key=f"del_asset_{asset['id']}"):
+                        if io_.delete_asset(asset["id"]):
+                            st.rerun()
+
+        # --- Watchlist ---
+        st.divider()
+        st.write("### TARGET WATCHLIST")
+
+        with st.expander("[ + ADD PRICE TARGET ]"):
+            with st.form("add_watch_form", clear_on_submit=True):
+                w_metal = st.selectbox(
+                    "METAL",
+                    metal_codes,
+                    format_func=lambda c: f"{c} - {eng.METALS_DB[c]['name']}",
+                )
+                w_direction = st.selectbox("DIRECTION", ["below", "above"])
+                w_target = st.number_input(f"TARGET PRICE ({curr})", min_value=0.01, step=1.0)
+                if st.form_submit_button("[ ARM TARGET ]"):
+                    if io_.add_watch(user_email, w_metal, curr, w_target, w_direction):
+                        st.success("TARGET ARMED.")
+                        st.rerun()
+                    else:
+                        st.error("FAILED TO ARM TARGET.")
+
+        watches = io_.list_watchlist(user_email)
+        if not watches:
+            st.code(">>> NO ACTIVE TARGETS.", language="bash")
+        else:
+            for w in watches:
+                live = io_.fetch_live_rate(w["metal"], w["currency"])
+                status = "PENDING"
+                if live is not None:
+                    if w["direction"] == "below" and live <= float(w["target_price"]):
+                        status = "TRIGGERED"
+                    elif w["direction"] == "above" and live >= float(w["target_price"]):
+                        status = "TRIGGERED"
+                live_str = f"{w['currency']} {live:,.2f}" if live is not None else "N/A"
+                cols = st.columns([5, 1])
+                with cols[0]:
+                    st.code(
+                        f"""
+METAL       : {w['metal']} ({eng.METALS_DB.get(w['metal'], {'name': '?'})['name']})
+DIRECTION   : {w['direction'].upper()}
+TARGET      : {w['currency']} {float(w['target_price']):,.2f}
+LIVE        : {live_str}
+STATUS      : {status}
+""".strip(),
+                        language="bash",
+                    )
+                with cols[1]:
+                    if st.button("[ DELETE ]", key=f"del_watch_{w['id']}"):
+                        if io_.delete_watch(w["id"]):
+                            st.rerun()
+
+        st.divider()
         if st.button("[ TERMINATE SESSION & LOCK VAULT ]"):
-            supabase.auth.sign_out()
+            io_.sign_out()
             st.session_state.user_email = None
             st.rerun()
 
-# --- MODULE 3: ALERT WEBHOOKS ---
+# --------------------------------------------------------------------------- #
+# MODULE 3: ALERT WEBHOOKS (stub preserved — wiring is future scope)
+# --------------------------------------------------------------------------- #
+
 elif app_mode == "ALERT WEBHOOKS":
     st.subheader("AUTOMATED MARKET SURVEILLANCE")
     st.write("DEPLOY BACKGROUND TRACKERS TO MONITOR PRICE THRESHOLDS.")
-    
+    st.caption(
+        "Note: webhook firing requires an out-of-process worker. "
+        "Use the WATCHLIST under VAULT for immediate target monitoring during your session."
+    )
+
     with st.form("alert_form"):
         contact = st.text_input("ENTER TRANSMISSION ADDRESS (Email/Telegram ID)")
-        target_price = st.number_input(f"TARGET 24K DROP THRESHOLD ({curr})", min_value=1.0, value=float(fetch_live_rates(curr) or 100.0) - 5.0)
-        submitted = st.form_submit_button("[ DEPLOY SURVEILLANCE CRON JOB ]")
-        
-        if submitted:
-            st.success(f"TRACKER DEPLOYED. SYSTEM WILL PING {contact} IF {curr} DROPS BELOW {target_price:,.2f}.")
+        live = io_.fetch_live_rate(selected_metal, curr) or 100.0
+        target_price = st.number_input(
+            f"TARGET {selected_metal} DROP THRESHOLD ({curr})",
+            min_value=1.0,
+            value=max(live - 5.0, 1.0),
+        )
+        if st.form_submit_button("[ DEPLOY SURVEILLANCE CRON JOB ]"):
+            if contact and (eng.is_valid_email(contact) or contact.startswith("@") or contact.isdigit()):
+                st.success(
+                    f"TRACKER REGISTERED. SYSTEM WILL PING {contact} "
+                    f"IF {selected_metal}/{curr} DROPS BELOW {target_price:,.2f}."
+                )
+            else:
+                st.error("INVALID TRANSMISSION ADDRESS.")
 
-# --- SYSTEM FOOTER ---
+# --------------------------------------------------------------------------- #
+# FOOTER
+# --------------------------------------------------------------------------- #
+
 st.markdown("<br><br>", unsafe_allow_html=True)
 st.divider()
 st.markdown(
@@ -318,10 +478,10 @@ st.markdown(
     "/// SYSTEM ARCHITECTURE COMPILED & ENGINEERED BY: <strong>NORA FRANK</strong> ///"
     "<br><br>"
     "<div style='font-size: 0.75em; opacity: 0.6; max-width: 600px; margin: 0 auto;'>"
-    "⚠️ <strong>DISCLAIMER:</strong> This application is built strictly for educational and portfolio demonstration purposes. "
+    "<strong>DISCLAIMER:</strong> This application is built strictly for educational and portfolio demonstration purposes. "
     "The data and predictions provided do not constitute professional financial advice. "
     "Please consult a certified financial advisor before making any real-world investment decisions."
     "</div>"
-    "</div>", 
-    unsafe_allow_html=True
+    "</div>",
+    unsafe_allow_html=True,
 )
