@@ -51,7 +51,7 @@ if not logger.handlers:
 def _secret(key: str, default: str | None = None) -> str | None:
     try:
         return st.secrets[key]
-    except (KeyError, FileNotFoundError):
+    except Exception:
         return default
 
 
@@ -169,10 +169,12 @@ def fetch_history(metal: str, currency: str, days: int = 90) -> pd.DataFrame | N
         return None
 
     ticker = METALS_DB[metal]["yf"]
-    period = f"{max(days + 20, 60)}d"  # extra padding for non-trading days
+    # Yahoo Finance only accepts specific period strings; map requested days to the
+    # nearest valid bucket with enough headroom for non-trading days.
+    period = "6mo" if days <= 90 else "1y"
 
     try:
-        df = yf.download(ticker, period=period, interval="1d", auto_adjust=False, progress=False, threads=False)
+        df = yf.download(ticker, period=period, interval="1d", auto_adjust=False, progress=False)
     except Exception as e:
         logger.warning("yfinance metal fetch failed for %s: %s", ticker, e, exc_info=True)
         return None
@@ -231,7 +233,6 @@ def _fetch_fx_rate(currency: str, dates: pd.DatetimeIndex) -> pd.Series | None:
             interval="1d",
             auto_adjust=False,
             progress=False,
-            threads=False,
         )
     except Exception as e:
         logger.warning("FX fetch failed for %s: %s", fx_ticker, e)
